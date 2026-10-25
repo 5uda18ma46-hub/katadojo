@@ -60,6 +60,8 @@ body {
   -webkit-tap-highlight-color: transparent;
   -webkit-text-size-adjust: 100%;
 }
+/* ダブルタップでの拡大を止める(盤を素早くタップするため) */
+html, body, button, .cell { touch-action: manipulation; }
 button { font: inherit; color: inherit; cursor: pointer; }
 [hidden] { display: none !important; }
 

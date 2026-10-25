@@ -571,6 +571,19 @@
   $('demo-prev').addEventListener('click', () => { st.demoK = Math.max(0, st.demoK - 1); render(); });
   $('demo-first').addEventListener('click', () => { st.demoK = 0; render(); });
 
+  // touch-action が効かない iOS でも、素早い2回目のタップの既定動作(拡大)を止める
+  let lastTouchEnd = 0;
+  document.addEventListener('touchend', e => {
+    const now = Date.now();
+    if (now - lastTouchEnd < 350) {
+      e.preventDefault();
+      // 既定動作を止めるとクリックも出ないので、自分で送る
+      const target = e.target.closest('button, .cell');
+      if (target) target.click();
+    }
+    lastTouchEnd = now;
+  }, { passive: false });
+
   // 座標
   $('files').innerHTML = [9, 8, 7, 6, 5, 4, 3, 2, 1].map(n => `<span>${n}</span>`).join('');
   $('ranks').innerHTML = ['一', '二', '三', '四', '五', '六', '七', '八', '九'].map(n => `<span>${n}</span>`).join('');
