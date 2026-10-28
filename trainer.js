@@ -7,13 +7,109 @@
 
   function planItem(item) { return { piece: item[0], mv: S.parseUsi(item[1]), usi: item[1], note: item[2] }; }
 
-  // 囲いの開始局面。'after:mino' なら美濃囲いをお手本順に組んだ局面から
+  // 囲いの開始局面。'after:mino' なら美濃囲いをお手本順に組んだ局面(相手の手も含む)から
   function startPosition(lessons, lesson) {
     if (lesson.kind === 'line' || lesson.start === 'initial') return S.fromSfen(S.INITIAL_SFEN);
     const prev = lessonById(lessons, lesson.start.slice('after:'.length));
-    let pos = startPosition(lessons, prev);
-    for (const item of prev.plan) pos = S.applyOwnMove(pos, planItem(item).mv);
-    return pos;
+    return playCastle(lessons, prev, true).pos;
+  }
+
+  // ---- 囲いの相手 ----
+  // 台本の from 番目以降で、今指せる最初の手。指せない手は飛ばす
+  function nextScriptMove(pos, script, from) {
+    const legal = S.legalMoves(pos);
+    for (let i = from; i < script.length; i++) {
+      const mv = S.parseUsi(script[i][0]);
+      if (legal.some(m => S.sameMove(m, mv))) return { index: i, mv, note: script[i][1] };
+    }
+    return null;
+  }
+
+  // 相手の番の手。台本が尽きたら手番だけ渡す(パス)
+  function applyReply(pos, reply) {
+    if (reply) return S.applyMove(pos, reply.mv);
+    const next = S.clone(pos);
+    next.turn = 1 - pos.turn;
+    return next;
+  }
+
+  // お手本の順番で、相手の応手もはさみながら囲いを組む
+  function playCastle(lessons, lesson, replyAfterLast) {
+    let pos = startPosition(lessons, lesson);
+    const script = lesson.opponent.script;
+    const steps = [];
+    let from = 0;
+    lesson.plan.forEach((raw, k) => {
+      const item = planItem(raw);
+      steps.push({ mv: item.mv, note: item.note, side: S.SENTE });
+      pos = S.applyMove(pos, item.mv);
+      if (k === lesson.plan.length - 1 && !replyAfterLast) return;
+      const reply = nextScriptMove(pos, script, from);
+      if (reply) { steps.push({ mv: reply.mv, note: reply.note, side: S.GOTE }); from = reply.index + 1; }
+      pos = applyReply(pos, reply);
+    });
+    return { pos, steps };
+  }
+
+  function findPiece(pos, side, t) {
+    for (let f = 1; f <= 9; f++) for (let r = 1; r <= 9; r++) {
+      const p = pos.board[f][r];
+      if (p && p.s === side && p.t === t && !p.p) return [f, r];
+    }
+    return null;
+  }
+
+  function pathClear(pos, [f1, r1], [f2, r2]) {
+    const df = Math.sign(f2 - f1), dr = Math.sign(r2 - r1);
+    for (let f = f1 + df, r = r1 + dr; f !== f2 || r !== r2; f += df, r += dr) {
+      if (pos.board[f][r]) return false;
+    }
+    return true;
+  }
+
+  // 咎めの手順(相手番の局面で判定)。当てはまらなければ null
+  const RULE_CHECKS = {
+    // 角同士がにらみ合っていたら、相手が角を交換する
+    bishopTrade(pos) {
+      const mine = findPiece(pos, S.SENTE, 'B'), theirs = findPiece(pos, S.GOTE, 'B');
+      if (!mine || !theirs) return null;
+      if (Math.abs(mine[0] - theirs[0]) !== Math.abs(mine[1] - theirs[1])) return null;
+      if (!pathClear(pos, theirs, mine)) return null;
+      const promote = S.inZone(S.GOTE, mine[1]);
+      return [{ from: theirs, to: mine, promote }];
+    },
+    // 飛車先の歩が5段目まで来ていて、6段目を歩以外で守っていなければ、歩を交換される
+    filePush(pos, rule) {
+      const f = rule.file;
+      const at = (r, side, t) => { const p = pos.board[f][r]; return p && p.s === side && p.t === t && !p.p; };
+      if (!at(5, S.GOTE, 'P') || !at(7, S.SENTE, 'P') || !at(2, S.GOTE, 'R')) return null;
+      if (pos.board[f][3] || pos.board[f][4]) return null;
+      for (let af = 1; af <= 9; af++) for (let ar = 1; ar <= 9; ar++) {
+        const p = pos.board[af][ar];
+        if (!p || p.s !== S.SENTE || (af === f && ar === 7)) continue;
+        if (S.attacksFrom(pos, af, ar).some(([x, y]) => x === f && y === 6)) return null;
+      }
+      return [
+        { from: [f, 5], to: [f, 6], promote: false },
+        { from: [f, 7], to: [f, 6], promote: false },
+        { from: [f, 2], to: [f, 6], promote: false },
+      ];
+    },
+  };
+
+  // 返り値: { rule, moves } / null。手順がすべて合法なときだけ咎める
+  function findPunish(pos, rules) {
+    for (const rule of rules || []) {
+      const moves = RULE_CHECKS[rule.type](pos, rule);
+      if (!moves) continue;
+      let p = pos, ok = true;
+      for (const mv of moves) {
+        if (!S.legalMoves(p).some(m => S.sameMove(m, mv))) { ok = false; break; }
+        p = S.applyMove(p, mv);
+      }
+      if (ok) return { rule, moves };
+    }
+    return null;
   }
 
   function finalPosition(lessons, lesson) {
@@ -101,7 +197,7 @@
   }
 
   const api = {
-    lessonById, planItem, startPosition, finalPosition, planMoveAvailable, completable,
+    lessonById, planItem, startPosition, finalPosition, nextScriptMove, applyReply, playCastle, findPunish, planMoveAvailable, completable,
     judgeCastleMove, castleHint, stepOf, leafPaths, pathKey, branchNames, flatten,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

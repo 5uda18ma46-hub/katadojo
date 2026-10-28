@@ -89,8 +89,10 @@
     st.pos = T.startPosition(LESSONS, lesson);
     st.history = []; st.selected = null; st.hint = 0; st.mistakes = 0; st.stepMistakes = 0;
     st.finished = false; st.busy = false;
+    st.punished = false;
     if (lesson.kind === 'castle') {
       st.remaining = st.plan.map((_, i) => i);
+      st.scriptFrom = 0;
     } else {
       st.node = lesson.line; st.i = 0; st.path = [];
     }
@@ -101,7 +103,7 @@
   function introHtml() {
     const l = st.lesson;
     const how = l.kind === 'castle'
-      ? '駒をタップして動かし、囲いを完成させよう。順番は自由ですが、駒が通り道をふさぐと先に進めなくなります。相手の手は省略しています。'
+      ? `駒をタップして動かし、囲いを完成させよう。順番は自由ですが、駒が通り道をふさぐと先に進めなくなります。相手(${l.opponent.name})も実戦のように指してきて、隙を作ると咎めに来ます。`
       : 'あなたは先手(▲・下側)。相手の手は自動で指されます。相手の応じ方によって変化が分かれます。';
     return `<div class="msg-title">${l.summary}</div>
       <ul>${l.points.map(p => `<li>${p}</li>`).join('')}</ul>
@@ -145,7 +147,7 @@
 
   // ---------- 入力 ----------
   function canInput() {
-    if (!st || st.mode !== 'practice' || st.busy || st.finished) return false;
+    if (!st || st.mode !== 'practice' || st.busy || st.finished || st.punished) return false;
     return st.pos.turn === S.SENTE;
   }
 
@@ -194,7 +196,7 @@
   function snapshot() {
     return {
       pos: st.pos, remaining: st.remaining && st.remaining.slice(),
-      node: st.node, i: st.i, path: st.path && st.path.slice(),
+      node: st.node, i: st.i, path: st.path && st.path.slice(), scriptFrom: st.scriptFrom,
       entries: st.entries.slice(), msgKind: st.msgKind,
     };
   }
@@ -217,13 +219,60 @@
     st.history.push(snapshot());
     const item = st.plan[judge.index];
     const label = S.toJapanese(st.pos, mv);
-    st.pos = S.applyOwnMove(st.pos, mv);
+    st.pos = S.applyMove(st.pos, mv);
     st.remaining = st.remaining.filter(i => i !== judge.index);
     st.hint = 0; st.stepMistakes = 0;
     st.msgKind = 'good';
     st.entries = [{ move: label, note: item.note }];
-    if (!st.remaining.length) finishLesson();
+    if (!st.remaining.length) { finishLesson(); render(); return; }
     render();
+    advanceCastleOpponent();
+  }
+
+  // 囲いの相手: 隙があれば咎め、なければ台本の次の手
+  function advanceCastleOpponent() {
+    st.busy = true;
+    render();
+    const lessonAtStart = st.lesson;
+    const alive = () => st && st.lesson === lessonAtStart && st.mode === 'practice';
+    setTimeout(() => {
+      if (!alive()) return;
+      const opp = st.lesson.opponent;
+      const punish = T.findPunish(st.pos, opp.rules);
+      if (punish) { playPunish(punish, alive); return; }
+      const reply = T.nextScriptMove(st.pos, opp.script, st.scriptFrom);
+      if (reply) {
+        st.entries.push({ move: S.toJapanese(st.pos, reply.mv), note: reply.note, opp: true });
+        st.scriptFrom = reply.index + 1;
+      }
+      st.pos = T.applyReply(st.pos, reply);
+      st.busy = false;
+      render();
+    }, OPP_DELAY);
+  }
+
+  // 咎めの手順を1手ずつ見せてから、理由とやり直しボタンを出す
+  function playPunish(punish, alive) {
+    st.mistakes++;
+    st.msgKind = 'bad';
+    const mine = st.entries[0];
+    st.entries = [{ html: '<div class="msg-title">相手が咎めに来ました！</div>' }];
+    if (mine && mine.move) st.entries.push({ move: mine.move, note: '' });
+    const moves = punish.moves.slice();
+    const step = () => {
+      if (!alive()) return;
+      const mv = moves.shift();
+      const side = st.pos.turn;
+      st.entries.push({ move: S.toJapanese(st.pos, mv), note: '', opp: side === S.GOTE });
+      st.pos = S.applyMove(st.pos, mv);
+      if (moves.length) { render(); setTimeout(step, OPP_DELAY); return; }
+      st.busy = false;
+      st.punished = true;
+      st.entries.push({ html: `${punish.rule.why}<div class="note"><b>こうしよう:</b>${punish.rule.fix}</div>
+        <button class="btn primary rewind" data-act="rewind">1手戻してやり直す</button>` });
+      render();
+    };
+    step();
   }
 
   function submitLineMove(mv) {
@@ -367,7 +416,7 @@
   // ---------- お手本 ----------
   function demoSteps() {
     const l = st.lesson;
-    if (l.kind === 'castle') return st.plan.map(p => ({ mv: p.mv, note: p.note, own: true }));
+    if (l.kind === 'castle') return T.playCastle(LESSONS, l, false).steps;
     return T.flatten(l.line, st.demoPath).steps;
   }
 
@@ -377,12 +426,11 @@
     const entries = [];
     for (let k = 0; k < st.demoK; k++) {
       const label = S.toJapanese(pos, steps[k].mv);
-      pos = steps[k].own ? S.applyOwnMove(pos, steps[k].mv) : S.applyMove(pos, steps[k].mv);
-      if (k >= st.demoK - 2) entries.push({ move: label, note: steps[k].note, opp: !steps[k].own && k % 2 === 1 });
+      const opp = pos.turn === S.GOTE;
+      pos = S.applyMove(pos, steps[k].mv);
+      if (k >= st.demoK - 2) entries.push({ move: label, note: steps[k].note, opp });
     }
-    // 囲いは自分の手だけなので、最新の1手だけ見せる
-    const shown = st.lesson.kind === 'castle' ? entries.slice(-1) : entries;
-    return { pos, steps, entries: shown };
+    return { pos, steps, entries };
   }
 
   // ---------- 描画 ----------
@@ -554,12 +602,16 @@
     }
     render();
   });
-  $('btn-undo').addEventListener('click', () => {
+  function undo() {
     if (!st || st.busy || !st.history.length) return;
     const snap = st.history.pop();
     Object.assign(st, snap);
-    st.selected = null; st.hint = 0; st.stepMistakes = 0; st.finished = false;
+    st.selected = null; st.hint = 0; st.stepMistakes = 0; st.finished = false; st.punished = false;
     render();
+  }
+  $('btn-undo').addEventListener('click', undo);
+  $('msg').addEventListener('click', e => {
+    if (e.target.closest('[data-act="rewind"]')) undo();
   });
   $('btn-reset').addEventListener('click', () => {
     if (!st || st.busy) return;
