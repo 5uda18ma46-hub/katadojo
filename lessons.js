@@ -1,7 +1,8 @@
 // 型のデータ。指し手はUSI形式(7g7f = ▲7六歩、P*2c = 2三に歩を打つ、末尾+ = 成る)
 // castle: 囲いを作る。順番は自由で、plan の並びが「お手本の順番」。
 //         相手は opponent.script を順に指し(指せない手は飛ばす)、rules に当てはまる隙があれば咎めに来る
-// line:   相手の手も含む手順。branches は相手の応手による分かれ道
+// line:   相手の手も含む手順。branches は相手の応手による分かれ道。
+//         rules は型から外れた手を咎める種類(型の手なら起きない隙だけを咎める)
 (function (root) {
   'use strict';
 
@@ -209,6 +210,7 @@
         '▲2四歩で歩をぶつけて、銀と飛車で突破',
         '相手が受けても受けなくても、攻めが続く',
       ],
+      rules: [{ type: 'bishopTrade' }, { type: 'freeCapture' }],
       line: {
         moves: [
           ['2g2f', '飛車先の歩を突きます。棒銀は飛車と銀で2筋を攻める戦法です。'],
@@ -263,6 +265,7 @@
         '美濃囲いに囲ってから攻める',
         '▲6五歩で角道を開け、飛車と角を同時に働かせる',
       ],
+      rules: [{ type: 'bishopTrade' }, { type: 'filePush', file: 8 }, { type: 'freeCapture' }],
       line: {
         moves: [
           ['7g7f', '角道を開けます。'],
@@ -319,6 +322,7 @@
         '5五の歩が相手の角の利きも止めてくれる',
         '▲5四歩で仕掛ける。取られても取られなくても攻めが続く',
       ],
+      rules: [{ type: 'bishopTrade' }, { type: 'filePush', file: 8 }, { type: 'freeCapture' }],
       line: {
         moves: [
           ['5g5f', '5筋の歩を突きます。中飛車は盤の真ん中(5筋)から攻める戦法です。'],

@@ -274,7 +274,7 @@
   const api = {
     SENTE, GOTE, HAND_ORDER, NAMES, PROMOTED_NAMES, INITIAL_SFEN,
     fromSfen, clone, legalMoves, applyMove, applyOwnMove, inCheck, canPromoteType, inZone, mustPromote,
-    parseUsi, toUsi, sameMove, toJapanese, squareName, attacksFrom,
+    parseUsi, toUsi, sameMove, toJapanese, squareName, attacksFrom, isAttacked,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Shogi = api;

@@ -95,19 +95,102 @@
         { from: [f, 2], to: [f, 6], promote: false },
       ];
     },
+    // 相手が得をする駒取り(タダ取り・駒損になる交換)があれば取る
+    freeCapture(pos) {
+      const best = bestCapture(pos);
+      return best && best.gain > 0 ? [best.mv] : null;
+    },
   };
 
-  // 返り値: { rule, moves } / null。手順がすべて合法なときだけ咎める
+  const VALUE = { P: 1, L: 3, N: 3, S: 5, G: 6, B: 8, R: 10, K: 0 };
+  function pieceValue(pc) {
+    if (!pc) return 0;
+    if (pc.p) return pc.t === 'R' ? 12 : pc.t === 'B' ? 10 : 6;
+    return VALUE[pc.t];
+  }
+
+  // 相手番の局面で、駒取りによる相手の最大の得(取り返されるなら取った駒の分を引く)
+  function bestCapture(pos) {
+    let best = null;
+    for (const m of S.legalMoves(pos)) {
+      if (m.drop) continue;
+      const target = pos.board[m.to[0]][m.to[1]];
+      if (!target || target.s === pos.turn) continue;
+      const next = S.applyMove(pos, m);
+      let gain = pieceValue(target);
+      if (S.isAttacked(next, m.to[0], m.to[1], next.turn)) gain -= pieceValue(next.board[m.to[0]][m.to[1]]);
+      if (!best || gain > best.gain) best = { mv: m, gain, target };
+    }
+    return best;
+  }
+
+  function pieceLabel(pc) { return pc.p ? S.PROMOTED_NAMES[pc.t] : S.NAMES[pc.t]; }
+
+  // 咎めの説明。ルールに書いてなければ種類ごとの決まり文句
+  function ruleText(rule, pos, moves) {
+    if (rule.why) return { why: rule.why, fix: rule.fix };
+    if (rule.type === 'bishopTrade') {
+      return {
+        why: '角道が開いたまま、角同士がにらみ合っていました。角を交換されて、陣形が崩れてしまいます。',
+        fix: '角交換を避けたいときは、▲6六歩などで角道を止めておこう。',
+      };
+    }
+    if (rule.type === 'filePush') {
+      return {
+        why: '飛車先の歩を交換されて、相手の飛車が自由に動けるようになりました。',
+        fix: '△8五歩と伸ばされたら、▲7七角などで8六を守っておこう。',
+      };
+    }
+    const mv = moves[0];
+    const target = pos.board[mv.to[0]][mv.to[1]];
+    const recapture = S.isAttacked(S.applyMove(pos, mv), mv.to[0], mv.to[1], S.SENTE);
+    return {
+      why: recapture
+        ? `${pieceLabel(target)}を取られて、取り返しても駒損になってしまいました。`
+        : `${pieceLabel(target)}がタダで取られてしまいました。`,
+      fix: '駒を動かす前に、動かした先や空いた升に相手の駒が利いていないか確認しよう。',
+    };
+  }
+
+  // ルールに当てはまる咎め。{ moves, score } / null(手順がすべて合法なときだけ)
+  function checkRule(pos, rule) {
+    const moves = RULE_CHECKS[rule.type](pos, rule);
+    if (!moves) return null;
+    let p = pos;
+    for (const mv of moves) {
+      if (!S.legalMoves(p).some(m => S.sameMove(m, mv))) return null;
+      p = S.applyMove(p, mv);
+    }
+    const score = rule.type === 'freeCapture' ? bestCapture(pos).gain : 1;
+    return { moves, score };
+  }
+
+  function withText(rule, pos, moves) {
+    return Object.assign({ rule, moves }, ruleText(rule, pos, moves));
+  }
+
+  // 囲い用。返り値: { rule, moves, why, fix } / null
   function findPunish(pos, rules) {
     for (const rule of rules || []) {
-      const moves = RULE_CHECKS[rule.type](pos, rule);
-      if (!moves) continue;
-      let p = pos, ok = true;
-      for (const mv of moves) {
-        if (!S.legalMoves(p).some(m => S.sameMove(m, mv))) { ok = false; break; }
-        p = S.applyMove(p, mv);
-      }
-      if (ok) return { rule, moves };
+      const hit = checkRule(pos, rule);
+      if (hit) return withText(rule, pos, hit.moves);
+    }
+    return null;
+  }
+
+  // 戦法用: 型の手(expected)なら起きない隙を、指した手(mv)が作ったときだけ咎める
+  function findLinePunish(pos, mv, expected, rules) {
+    const captured = m => (m.drop ? 0 : pieceValue(pos.board[m.to[0]][m.to[1]]));
+    const after = S.applyMove(pos, mv), afterExpected = S.applyMove(pos, expected);
+    for (const rule of rules || []) {
+      const hit = checkRule(after, rule);
+      if (!hit) continue;
+      const base = checkRule(afterExpected, rule);
+      // 駒取りは、自分が直前に取った駒の分を差し引いて比べる
+      const adjust = rule.type === 'freeCapture';
+      const score = hit.score - (adjust ? captured(mv) : 0);
+      const baseScore = base ? base.score - (adjust ? captured(expected) : 0) : 0;
+      if (score > 0 && score > baseScore) return withText(rule, after, hit.moves);
     }
     return null;
   }
@@ -197,7 +280,7 @@
   }
 
   const api = {
-    lessonById, planItem, startPosition, finalPosition, nextScriptMove, applyReply, playCastle, findPunish, planMoveAvailable, completable,
+    lessonById, planItem, startPosition, finalPosition, nextScriptMove, applyReply, playCastle, findPunish, findLinePunish, planMoveAvailable, completable,
     judgeCastleMove, castleHint, stepOf, leafPaths, pathKey, branchNames, flatten,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

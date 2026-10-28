@@ -268,7 +268,8 @@
       if (moves.length) { render(); setTimeout(step, OPP_DELAY); return; }
       st.busy = false;
       st.punished = true;
-      st.entries.push({ html: `${punish.rule.why}<div class="note"><b>こうしよう:</b>${punish.rule.fix}</div>
+      const tip = st.lesson.kind === 'line' ? '<div class="note">型の手が分からなければ、戻したあとヒントを使おう。</div>' : '';
+      st.entries.push({ html: `${punish.why}<div class="note"><b>こうしよう:</b>${punish.fix}</div>${tip}
         <button class="btn primary rewind" data-act="rewind">1手戻してやり直す</button>` });
       render();
     };
@@ -280,7 +281,18 @@
     if (!step) return;
     if (!S.sameMove(step.mv, mv)) {
       const near = step.near[S.toUsi(mv)];
-      miss(near || 'その手ではありません。もう一度考えてみよう。', !!near);
+      if (near) { miss(near, true); return; }
+      // 型から外れた手が隙を作ったなら、相手が実際に咎めに来る
+      const punish = T.findLinePunish(st.pos, mv, step.mv, st.lesson.rules);
+      if (!punish) { miss('その手ではありません。もう一度考えてみよう。'); return; }
+      st.history.push(snapshot());
+      st.entries = [{ move: S.toJapanese(st.pos, mv), note: '' }];
+      st.pos = S.applyMove(st.pos, mv);
+      st.busy = true;
+      render();
+      const lessonAtStart = st.lesson;
+      const alive = () => st && st.lesson === lessonAtStart && st.mode === 'practice';
+      setTimeout(() => { if (alive()) playPunish(punish, alive); }, OPP_DELAY);
       return;
     }
     st.history.push(snapshot());
